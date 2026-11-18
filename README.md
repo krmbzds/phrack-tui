@@ -14,6 +14,12 @@ Install it with cargo:
 
     $ cargo install phrack-tui
 
+Or skip the compile and fetch a prebuilt binary for macOS or Linux:
+
+    $ cargo binstall phrack-tui
+
+The same binaries are on the [releases page](https://github.com/krmbzds/phrack-tui/releases).
+
 Or build it from a checkout:
 
     $ cargo install --path .

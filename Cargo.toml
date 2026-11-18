@@ -8,8 +8,8 @@ repository = "https://github.com/krmbzds/phrack-tui"
 readme = "README.md"
 keywords = ["phrack", "tui", "terminal", "reader", "vim"]
 categories = ["command-line-utilities"]
-# the demo animation stays on GitHub; it is not part of the crate
-exclude = ["docs/"]
+# the demo animation and CI config stay on GitHub; they are not part of the crate
+exclude = ["docs/", ".github/"]
 
 [dependencies]
 crossterm = "0.29.0"
@@ -18,3 +18,12 @@ serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.2.1"
 unicode-width = "0.2.3"
 ureq = "3.5.2"
+
+[profile.release]
+strip = true
+
+# `cargo binstall phrack-tui` downloads the release binary instead of compiling.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
+bin-dir = "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
