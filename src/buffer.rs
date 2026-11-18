@@ -141,9 +141,7 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn new() -> Terminal {
-        let ct = std::env::var("COLORTERM").unwrap_or_default().to_lowercase();
-        let truecolor = ct.contains("truecolor") || ct.contains("24bit") || std::env::var("PHRACK_TRUECOLOR").is_ok();
-        Terminal { prev: None, truecolor }
+        Terminal { prev: None, truecolor: detect_truecolor() }
     }
 
     pub fn invalidate(&mut self) {
@@ -207,6 +205,11 @@ impl Terminal {
         self.prev = Some(buf.clone());
         Ok(())
     }
+}
+
+pub fn detect_truecolor() -> bool {
+    let ct = std::env::var("COLORTERM").unwrap_or_default().to_lowercase();
+    ct.contains("truecolor") || ct.contains("24bit") || std::env::var("PHRACK_TRUECOLOR").is_ok()
 }
 
 fn to_ansi256(c: Rgb) -> u8 {

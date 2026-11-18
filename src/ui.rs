@@ -337,8 +337,41 @@ fn draw_reader(app: &App, buf: &mut Buffer) {
 
 // ----------------------------------------------------------- status & cmd
 
+fn draw_wildmenu(app: &App, buf: &mut Buffer, items: &[String], idx: Option<usize>) {
+    let th = &app.theme;
+    let y = buf.h - 2;
+    let w = buf.w as usize;
+    let base = Style::new(th.status_fg, th.status_bg);
+    buf.fill(0, y, buf.w, 1, ' ', base);
+    let cur = idx.unwrap_or(0);
+    // scroll so the selected entry is visible
+    let widths: Vec<usize> = items.iter().map(|s| s.chars().count() + 2).collect();
+    let mut first = 0;
+    while first < cur && widths[first..=cur].iter().sum::<usize>() + 2 > w {
+        first += 1;
+    }
+    let mut x = 0usize;
+    if first > 0 {
+        x += buf.put(0, y, "< ", Style::new(th.dim, th.status_bg), 2);
+    }
+    for (i, it) in items.iter().enumerate().skip(first) {
+        if x + widths[i] > w.saturating_sub(2) && i != cur {
+            buf.put((w - 1) as u16, y, ">", Style::new(th.dim, th.status_bg), 1);
+            break;
+        }
+        let st = if Some(i) == idx { Style::new(th.status_bg, th.bright).bold() } else { base };
+        x += buf.put(x as u16, y, &format!(" {it} "), st, w - x);
+        x += 1;
+    }
+}
+
 fn draw_status(app: &App, buf: &mut Buffer) {
     let th = &app.theme;
+    if let Some(comp) = app.cmd.as_ref().and_then(|c| c.comp.as_ref()) {
+        if comp.items.len() > 1 {
+            return draw_wildmenu(app, buf, &comp.items, comp.idx);
+        }
+    }
     let y = buf.h - 2;
     let w = buf.w as usize;
     let base = Style::new(th.status_fg, th.status_bg);
@@ -397,7 +430,7 @@ fn draw_cmdline(app: &App, buf: &mut Buffer) {
     if !show.is_empty() {
         buf.put((w - show.chars().count() - 1) as u16, y, &show, Style::new(th.warn, th.bg).bold(), w);
     }
-    if let Some(CmdLine { prefix, text, ctx }) = &app.cmd {
+    if let Some(CmdLine { prefix, text, ctx, .. }) = &app.cmd {
         let label = match (prefix, ctx) {
             ('S', _) => "snippet name> ",
             ('R', _) => "rename> ",

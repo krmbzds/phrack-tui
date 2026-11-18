@@ -53,15 +53,28 @@ pub enum CmdCtx {
     BmNote(u32),
 }
 
+/// An in-progress Tab completion of the command line.
+pub struct Completion {
+    /// Text before the token being completed.
+    pub head: String,
+    pub items: Vec<String>,
+    pub idx: Option<usize>,
+}
+
 pub struct CmdLine {
     pub prefix: char,
     pub text: String,
     pub ctx: CmdCtx,
+    pub comp: Option<Completion>,
 }
 
 impl CmdLine {
     pub fn plain(prefix: char, text: String) -> CmdLine {
-        CmdLine { prefix, text, ctx: CmdCtx::None }
+        CmdLine { prefix, text, ctx: CmdCtx::None, comp: None }
+    }
+
+    pub fn with_ctx(prefix: char, text: String, ctx: CmdCtx) -> CmdLine {
+        CmdLine { prefix, text, ctx, comp: None }
     }
 }
 
@@ -204,6 +217,24 @@ impl App {
             _ => 0,
         };
         (gutter, self.view_w().saturating_sub(gutter + 1).max(1))
+    }
+
+    pub fn boot_info(&self, truecolor: bool) -> crate::boot::BootInfo {
+        crate::boot::BootInfo {
+            issues: self.lib.issues.len(),
+            philes: self.lib.total_articles(),
+            phosphor: self.theme.phosphor,
+            theme: self.theme.name,
+            truecolor,
+            scan: self.fx.scan,
+            glow: self.fx.glow,
+            vignette: self.fx.vignette,
+            flicker: self.fx.flicker,
+            read: self.st.read.len(),
+            bookmarks: self.coll.bookmarks.len(),
+            snippets: self.coll.snippets.len(),
+            last: self.st.last.map(|(i, a, _)| (i, a)),
+        }
     }
 
     pub fn resize(&mut self, w: u16, h: u16) {
@@ -481,7 +512,7 @@ impl App {
                 Pane::Articles => self.open_selected(),
             },
             K::Char('h') | K::Left | K::Backspace => self.browser.pane = Pane::Issues,
-            K::Tab => {
+            K::Tab | K::BackTab => {
                 self.browser.pane = if self.browser.pane == Pane::Issues { Pane::Articles } else { Pane::Issues };
             }
             K::Char('x') => self.toggle_read_selected(),
@@ -569,7 +600,6 @@ impl App {
             self.st.pos.insert((r.issue, r.art), r.row);
             self.st.last = Some((r.issue, r.art, r.row));
         }
-        self.st.theme = Some(self.theme.name.to_string());
         self.st.save();
     }
 
@@ -1419,7 +1449,14 @@ impl App {
     // ---- command line -----------------------------------------------------------
 
     fn cmdline_key(&mut self, k: K) {
+        let completing = self.cmd.as_ref().is_some_and(|c| c.prefix == ':' && c.ctx == CmdCtx::None);
+        match k {
+            K::Tab | K::Ctrl('n') if completing => return self.complete_cmd(false),
+            K::BackTab | K::Ctrl('p') if completing => return self.complete_cmd(true),
+            _ => {}
+        }
         let Some(c) = self.cmd.as_mut() else { return };
+        c.comp = None;
         match k {
             K::Esc | K::Ctrl('c') => self.cmd = None,
             K::Backspace => {
@@ -1434,7 +1471,7 @@ impl App {
             }
             K::Char(ch) => c.text.push(ch),
             K::Enter => {
-                let CmdLine { prefix, text, ctx } = self.cmd.take().unwrap();
+                let CmdLine { prefix, text, ctx, .. } = self.cmd.take().unwrap();
                 match ctx {
                     CmdCtx::NewSnippet => self.save_snippet(text.trim()),
                     CmdCtx::SnipName(id) => self.edit_snippet(id, Some(text.trim()), None),
@@ -1454,6 +1491,34 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Vim-style cycling completion: the first Tab fills the first match,
+    /// further Tabs (Shift-Tab backwards) walk the list.
+    fn complete_cmd(&mut self, back: bool) {
+        let Some(c) = self.cmd.as_mut() else { return };
+        if c.comp.is_none() {
+            let (start, items) = crate::complete::candidates(&c.text, &self.lib, &self.coll);
+            if items.is_empty() {
+                return;
+            }
+            c.comp = Some(Completion { head: c.text[..start].to_string(), items, idx: None });
+        }
+        let comp = c.comp.as_mut().unwrap();
+        let n = comp.items.len();
+        let next = match (comp.idx, back) {
+            (None, false) => 0,
+            (None, true) => n - 1,
+            (Some(i), false) => (i + 1) % n,
+            (Some(i), true) => (i + n - 1) % n,
+        };
+        comp.idx = Some(next);
+        c.text = format!("{}{}", comp.head, comp.items[next]);
+        // a lone command name that takes an argument: add the space, ready for the next Tab
+        if n == 1 && comp.head.trim_start_matches("'<,'>").trim().is_empty() && crate::complete::takes_arg(&comp.items[0]) {
+            c.text.push(' ');
+            c.comp = None;
         }
     }
 
@@ -1664,7 +1729,7 @@ impl App {
         let r = rd!(self);
         let Some(text) = r.selection_text() else { return };
         let auto: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(40).collect();
-        self.cmd = Some(CmdLine { prefix: 'S', text: auto, ctx: CmdCtx::NewSnippet });
+        self.cmd = Some(CmdLine::with_ctx('S', auto, CmdCtx::NewSnippet));
     }
 
     fn save_snippet(&mut self, name: &str) {

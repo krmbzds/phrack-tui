@@ -32,6 +32,8 @@ impl Rgb {
 #[derive(Clone, Debug)]
 pub struct Theme {
     pub name: &'static str,
+    /// Phosphor designation shown on the boot screen.
+    pub phosphor: &'static str,
     /// Flat background colour (cells with this bg get the CRT bulge gradient).
     pub bg: Rgb,
     /// Background in the middle of the "tube".
@@ -62,32 +64,8 @@ pub struct Theme {
 pub fn all() -> Vec<Theme> {
     vec![
         Theme {
-            name: "crt",
-            bg: Rgb::hex(0x030b05),
-            bg_center: Rgb::hex(0x07190c),
-            fg: Rgb::hex(0x5cff6e),
-            bright: Rgb::hex(0xa2ff99),
-            dim: Rgb::hex(0x2fa84a),
-            faint: Rgb::hex(0x17612b),
-            heading: Rgb::hex(0xc8ffc0),
-            link: Rgb::hex(0x80ffea),
-            mark: Rgb::hex(0xff80bf),
-            warn: Rgb::hex(0xffff80),
-            err: Rgb::hex(0xff9580),
-            cursorline: Rgb::hex(0x0c2c16),
-            select: Rgb::hex(0x14502a),
-            search_bg: Rgb::hex(0xffff80),
-            search_fg: Rgb::hex(0x10140a),
-            cur_bg: Rgb::hex(0xff80bf),
-            cur_fg: Rgb::hex(0x10040a),
-            border: Rgb::hex(0x1f8a3a),
-            status_bg: Rgb::hex(0x0f3d1d),
-            status_fg: Rgb::hex(0x8aff80),
-            glow: Rgb::hex(0x2dff55),
-            snippet: Rgb::hex(0x0b3f55),
-        },
-        Theme {
             name: "amber",
+            phosphor: "P3 AMBER",
             bg: Rgb::hex(0x0b0600),
             bg_center: Rgb::hex(0x1a0f02),
             fg: Rgb::hex(0xffb000),
@@ -111,11 +89,38 @@ pub fn all() -> Vec<Theme> {
             glow: Rgb::hex(0xffa000),
             snippet: Rgb::hex(0x123a5c),
         },
+        Theme {
+            name: "crt",
+            phosphor: "P1 GREEN",
+            bg: Rgb::hex(0x030b05),
+            bg_center: Rgb::hex(0x07190c),
+            fg: Rgb::hex(0x5cff6e),
+            bright: Rgb::hex(0xa2ff99),
+            dim: Rgb::hex(0x2fa84a),
+            faint: Rgb::hex(0x17612b),
+            heading: Rgb::hex(0xc8ffc0),
+            link: Rgb::hex(0x80ffea),
+            mark: Rgb::hex(0xff80bf),
+            warn: Rgb::hex(0xffff80),
+            err: Rgb::hex(0xff9580),
+            cursorline: Rgb::hex(0x0c2c16),
+            select: Rgb::hex(0x14502a),
+            search_bg: Rgb::hex(0xffff80),
+            search_fg: Rgb::hex(0x10140a),
+            cur_bg: Rgb::hex(0xff80bf),
+            cur_fg: Rgb::hex(0x10040a),
+            border: Rgb::hex(0x1f8a3a),
+            status_bg: Rgb::hex(0x0f3d1d),
+            status_fg: Rgb::hex(0x8aff80),
+            glow: Rgb::hex(0x2dff55),
+            snippet: Rgb::hex(0x0b3f55),
+        },
         // Colours taken from the nvim `colorscheme.lua` (bg, greens, comment, selection,
         // accents), with green promoted to text colour. cursorline, bg_center and
         // snippet are not in that file; they are picked to sit next to it.
         Theme {
             name: "dracula",
+            phosphor: "SYNTH VIOLET",
             bg: Rgb::hex(0x22212c),
             bg_center: Rgb::hex(0x2a2937),
             fg: Rgb::hex(0x8aff80),

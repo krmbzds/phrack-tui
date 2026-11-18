@@ -3,6 +3,7 @@ mod boot;
 mod buffer;
 mod collection;
 mod collview;
+mod complete;
 mod crt;
 mod data;
 mod doc;
@@ -42,7 +43,7 @@ USAGE:
 
 OPTIONS:
         --no-boot       skip the modem boot sequence
-        --theme NAME    crt (default), amber, dracula
+        --theme NAME    amber (default), crt, dracula (`:theme` inside saves your choice)
         --no-crt        disable scanlines / glow / vignette / flicker
         --dump WxH      render the first frame as plain text and exit (debugging)
     -h, --help          show this help
@@ -106,18 +107,22 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut st = PState::load(state::default_path());
+    let st = PState::load(state::default_path());
+    let mut theme_override: Option<String> = None;
     if let Some(t) = &opts.theme {
         if theme::by_name(t).is_none() {
             eprintln!("phrack-tui: unknown theme '{t}'");
             std::process::exit(2);
         }
-        st.theme = Some(t.clone());
+        theme_override = Some(t.clone());
     }
 
     if let Some((w, h)) = opts.dump {
         let coll = collection::Collection::load(collection::path_for(st.path.as_deref()));
         let mut app = App::new(lib, st, coll, (w, h));
+        if let Some(t) = theme_override.as_deref().and_then(theme::by_name) {
+            app.theme = t;
+        }
         app.fx = crt::Fx::none();
         let mut buf = Buffer::new(w, h, Style::new(app.theme.fg, app.theme.bg));
         ui::render(&app, &mut buf);
@@ -128,11 +133,14 @@ fn main() {
     let (w, h) = terminal::size().unwrap_or((100, 32));
     let coll = collection::Collection::load(collection::path_for(st.path.as_deref()));
     let mut app = App::new(lib, st, coll, (w, h));
+    if let Some(t) = theme_override.as_deref().and_then(theme::by_name) {
+        app.theme = t; // --theme applies to this session only; :theme persists
+    }
     if !opts.crt {
         app.fx = crt::Fx::none();
     }
     if opts.boot && std::env::var_os("PHRACK_NO_BOOT").is_none() {
-        app.boot = Some(Boot::new(app.lib.issues.len(), app.lib.total_articles()));
+        app.boot = Some(Boot::new(&app.boot_info(buffer::detect_truecolor())));
     }
     if let Err(e) = run(&mut app) {
         eprintln!("phrack-tui: {e}");

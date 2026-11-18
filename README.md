@@ -5,10 +5,10 @@ A green-phosphor CRT terminal reader for the Phrack archive in `issues/`, with v
     cargo run --release            # from the repo root (uses ./issues)
     cargo install --path .         # then: phrack-tui [ISSUES_DIR]
 
-Options: `--no-boot`, `--theme crt|amber|dracula`, `--no-crt`. Press **F1** inside for the full key reference.
+Options: `--no-boot`, `--theme amber|crt|dracula` (this session only; `:theme NAME` inside saves it), `--no-crt`. Press **F1** inside for the full key reference.
 
 - **Look**: scanlines, tube vignette, glyph bloom, rare flicker, rounded bezel, a 1985 modem boot screen.
-  Themes: `crt` (phosphor green, accents from the nvim dracula palette), `amber`, `dracula` (bg, accents and comment colours from the nvim `colorscheme.lua`, with its green as text colour; the cursor-line, tooltip and snippet tints are my own picks).
+  Themes: `amber` (default, P3 phosphor), `crt` (P1 green, accents from the nvim dracula palette), `dracula` (bg, accents and comment colours from the nvim `colorscheme.lua`, with its green as text colour; the cursor-line, tooltip and snippet tints are my own picks).
   Toggle effects with `:set noscan noglow novignette noflicker`, or `:set nocrt`.
 - **Vim**: `hjkl w b e 0 ^ $ gg G {n}G H M L ^d ^u ^f ^b zz zt zb { } / ? n N * # v V y m' ` and `:` commands.
 - **Phrack tricks**: `]]`/`[[` sections, `gs` outline, `]a`/`[a` next/prev phile (rolls across issues), `]i`/`[i` issues,

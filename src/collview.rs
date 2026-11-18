@@ -201,7 +201,7 @@ impl App {
                 K::Char('G') | K::End => v.sel = (n - 1).max(0) as usize,
                 K::Home => v.sel = 0,
                 K::Char(c @ ('g' | 'd')) => v.pending = Some(c),
-                K::Tab | K::Char('1') | K::Char('2') | K::Char('h') | K::Char('l') | K::Left | K::Right => {
+                K::Tab | K::BackTab | K::Char('1') | K::Char('2') | K::Char('h') | K::Char('l') | K::Left | K::Right => {
                     let to = match k {
                         K::Char('1') | K::Char('h') | K::Left => Tab::Bookmarks,
                         K::Char('2') | K::Char('l') | K::Right => Tab::Snippets,
@@ -233,7 +233,7 @@ impl App {
                             (Tab::Snippets, _) => ('E', it.note.clone(), CmdCtx::SnipNote(it.id)),
                             (Tab::Bookmarks, _) => ('E', it.note.clone(), CmdCtx::BmNote(it.id)),
                         };
-                        self.cmd = Some(CmdLine { prefix, text, ctx });
+                        self.cmd = Some(CmdLine::with_ctx(prefix, text, ctx));
                     }
                 }
                 K::Char('y') => {
