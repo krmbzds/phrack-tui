@@ -35,9 +35,60 @@ const COLS: u16 = 100;
 const ROWS: u16 = 30;
 const CW: f64 = 8.4; // advance of a 14px monospace glyph
 const CH: f64 = 17.0;
-const FONT: f64 = 14.0;
+// 8.4 px per cell / 0.6021 em advance (Menlo / Meslo / DejaVu Sans Mono) = 13.95 px
+const FONT: f64 = 13.95;
+const FONT_STACK: &str = "PhrackMono,'MesloLGS NF',Menlo,'SF Mono',Consolas,'DejaVu Sans Mono','Liberation Mono',monospace";
 const PAD: f64 = 20.0; // bezel
 const CAP_H: f64 = 50.0; // caption strip under the monitor
+
+/// Optional terminal font to embed in the SVG so it looks the same everywhere.
+///
+/// Point `PHRACK_DEMO_FONT_DIR` at a directory holding `regular.woff2`, `bold.woff2`
+/// and `covered-regular.txt` / `covered-bold.txt` (hex ranges, e.g. `20-7e a0-ff`).
+/// Nothing is stored in the repository: the font only ends up inside the generated SVG.
+/// Without it the SVG uses whatever monospace font the viewer has.
+#[derive(Default)]
+struct Fonts {
+    regular: Option<Vec<u8>>,
+    bold: Option<Vec<u8>>,
+    cov_regular: Vec<(u32, u32)>,
+    cov_bold: Vec<(u32, u32)>,
+}
+
+impl Fonts {
+    fn load() -> Fonts {
+        let Some(dir) = std::env::var_os("PHRACK_DEMO_FONT_DIR").map(std::path::PathBuf::from) else {
+            return Fonts::default();
+        };
+        let ranges = |name: &str| -> Vec<(u32, u32)> {
+            fs::read_to_string(dir.join(name))
+                .unwrap_or_default()
+                .split_whitespace()
+                .filter_map(|r| {
+                    let (a, b) = r.split_once('-')?;
+                    Some((u32::from_str_radix(a, 16).ok()?, u32::from_str_radix(b, 16).ok()?))
+                })
+                .collect()
+        };
+        Fonts {
+            regular: fs::read(dir.join("regular.woff2")).ok(),
+            bold: fs::read(dir.join("bold.woff2")).ok(),
+            cov_regular: ranges("covered-regular.txt"),
+            cov_bold: ranges("covered-bold.txt"),
+        }
+    }
+
+    /// Is `ch` drawn by the embedded font in this weight? Without an embedded font we
+    /// trust the viewer's monospace font for ASCII and the box-drawing/block range.
+    fn covers(&self, ch: char, bold: bool) -> bool {
+        let (font, cov) = if bold { (&self.bold, &self.cov_bold) } else { (&self.regular, &self.cov_regular) };
+        if font.is_none() {
+            return ch.is_ascii() || ('\u{2500}'..='\u{259f}').contains(&ch);
+        }
+        let c = ch as u32;
+        cov.iter().any(|&(a, b)| c >= a && c <= b)
+    }
+}
 
 struct Frame {
     start: u64,
@@ -56,6 +107,7 @@ struct Caption {
 struct Recorder {
     app: App,
     corpus: Library,
+    fonts: Fonts,
     buf: Buffer,
     t: u64,
     frames: Vec<Frame>,
@@ -93,6 +145,7 @@ impl Recorder {
         let th = app.theme.clone();
         Recorder {
             corpus: lib,
+            fonts: Fonts::load(),
             buf: Buffer::new(COLS, ROWS, Style::new(th.fg, th.bg)),
             app,
             t: 0,
@@ -330,7 +383,9 @@ impl Recorder {
             cells: usize,
             fg: Rgb,
             bold: bool,
-            ascii: bool,
+            /// Every glyph comes from the font that will draw it, so the browser's own
+            /// (fixed) advance gives the right spacing. Otherwise pin each glyph to its cell.
+            natural: bool,
         }
         let mut runs: Vec<Run> = Vec::new();
         let mut cur: Option<Run> = None;
@@ -355,12 +410,14 @@ impl Recorder {
                     _ => ul.push((x, x + cw, c.st.fg)),
                 }
             }
-            let same = cur.as_ref().is_some_and(|r| r.fg == c.st.fg && r.bold == c.st.bold && spaces <= 2);
+            // Bold Meslo lacks most box-drawing; those glyphs are identical lines, so draw them regular.
+            let bold = c.st.bold && (self.fonts.covers(c.ch, true) || !self.fonts.covers(c.ch, false));
+            let same = cur.as_ref().is_some_and(|r| r.fg == c.st.fg && r.bold == bold && spaces <= 2);
             if !same {
                 if let Some(r) = cur.take() {
                     runs.push(r);
                 }
-                cur = Some(Run { x0: x, text: String::new(), xs: Vec::new(), cells: 0, fg: c.st.fg, bold: c.st.bold, ascii: true });
+                cur = Some(Run { x0: x, text: String::new(), xs: Vec::new(), cells: 0, fg: c.st.fg, bold, natural: true });
                 spaces = 0;
             }
             let r = cur.as_mut().unwrap();
@@ -373,11 +430,8 @@ impl Recorder {
             r.text.push(c.ch);
             r.xs.push(x as f64 * CW);
             r.cells = x + cw - r.x0;
-            // ASCII and the box-drawing/block range are the same width in every monospace
-            // font; anything else (◆ ▶ braille ...) may fall back to another font, so those
-            // runs pin each glyph to its cell instead.
-            if !(c.ch.is_ascii() || ('\u{2500}'..='\u{259f}').contains(&c.ch)) {
-                r.ascii = false;
+            if !self.fonts.covers(c.ch, r.bold) {
+                r.natural = false;
             }
             x += cw;
         }
@@ -392,10 +446,10 @@ impl Recorder {
             if r.bold {
                 out.push_str(" font-weight=\"700\"");
             }
-            if r.ascii {
-                let _ = write!(out, " x=\"{}\" textLength=\"{}\"", f1(r.x0 as f64 * CW), f1(r.cells as f64 * CW));
+            if r.natural {
+                // the font's fixed advance lays the glyphs out: no stretching, no spacing tricks
+                let _ = write!(out, " x=\"{}\"", f1(r.x0 as f64 * CW));
             } else {
-                // box-drawing and friends: pin every glyph to its cell
                 let xs: Vec<String> = r.xs.iter().map(|v| f1(*v)).collect();
                 let _ = write!(out, " x=\"{}\"", xs.join(" "));
             }
@@ -499,6 +553,15 @@ impl Recorder {
         theme_iv.iter_mut().for_each(merge);
 
         s.push_str("<defs>\n");
+        if self.fonts.regular.is_some() || self.fonts.bold.is_some() {
+            s.push_str("<style>");
+            for (bytes, weight) in [(&self.fonts.regular, 400), (&self.fonts.bold, 700)] {
+                if let Some(b) = bytes {
+                    let _ = write!(s, "@font-face{{font-family:'PhrackMono';font-weight:{weight};src:url(data:font/woff2;base64,{}) format('woff2')}}", crate::app::base64(b));
+                }
+            }
+            s.push_str("</style>\n");
+        }
         for (i, t) in self.themes.iter().enumerate() {
             if theme_iv[i].is_empty() {
                 continue;
@@ -535,7 +598,7 @@ impl Recorder {
                 seg.entry(id).or_default().push((f.start, f.start + f.dur));
             }
         }
-        let _ = writeln!(s, "<g filter=\"url(#glow)\" transform=\"translate({} {})\" font-family=\"Menlo,'SF Mono',Consolas,'DejaVu Sans Mono','Liberation Mono',monospace\" font-size=\"{}\" xml:space=\"preserve\">", f1(PAD), f1(PAD), f1(FONT));
+        let _ = writeln!(s, "<g filter=\"url(#glow)\" transform=\"translate({} {})\" font-family=\"{}\" font-size=\"{}\" text-rendering=\"geometricPrecision\" style=\"font-kerning:none;font-variant-ligatures:none\" xml:space=\"preserve\">", f1(PAD), f1(PAD), FONT_STACK, f1(FONT));
         let mut ids: Vec<u32> = seg.keys().copied().collect();
         ids.sort();
         for id in ids {
@@ -602,13 +665,14 @@ impl Recorder {
             let Some((attr, anim)) = vis(&iv, still, total) else { continue };
             let _ = writeln!(
                 s,
-                "<g{attr}><text x=\"24\" y=\"{}\" fill=\"{}\" font-family=\"-apple-system,'Segoe UI',Helvetica,Arial,sans-serif\" font-size=\"16\" font-weight=\"600\">{}</text><text x=\"{}\" y=\"{}\" text-anchor=\"end\" fill=\"{}\" font-family=\"Menlo,'SF Mono',Consolas,'DejaVu Sans Mono',monospace\" font-size=\"13\">{}</text>{anim}</g>",
+                "<g{attr}><text x=\"24\" y=\"{}\" fill=\"{}\" font-family=\"-apple-system,'Segoe UI',Helvetica,Arial,sans-serif\" font-size=\"16\" font-weight=\"600\">{}</text><text x=\"{}\" y=\"{}\" text-anchor=\"end\" fill=\"{}\" font-family=\"{}\" font-size=\"13\" style=\"font-kerning:none\">{}</text>{anim}</g>",
                 f1(cy + 30.0),
                 hex(th.bright),
                 esc(&cap.title),
                 f1(vw - 24.0),
                 f1(cy + 30.0),
                 hex(th.dim.mix(th.fg, 0.55)),
+                FONT_STACK,
                 esc(&cap.keys),
             );
         }

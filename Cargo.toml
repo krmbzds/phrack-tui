@@ -2,6 +2,14 @@
 name = "phrack-tui"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A terminal reader for the Phrack archive, with vim keys and an amber CRT look"
+repository = "https://github.com/krmbzds/phrack-tui"
+readme = "README.md"
+keywords = ["phrack", "tui", "terminal", "reader", "vim"]
+categories = ["command-line-utilities"]
+# the demo animation stays on GitHub; it is not part of the crate
+exclude = ["docs/"]
 
 [dependencies]
 crossterm = "0.29.0"

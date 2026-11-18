@@ -1972,7 +1972,7 @@ pub fn copy_to_clipboard(text: &str) -> bool {
     false
 }
 
-fn base64(data: &[u8]) -> String {
+pub(crate) fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut s = String::new();
     for ch in data.chunks(3) {
