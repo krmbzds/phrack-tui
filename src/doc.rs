@@ -189,9 +189,9 @@ fn ref_regexes() -> &'static (Regex, Regex, Regex) {
     R.get_or_init(|| {
         (
             // "Phrack 49, article 3" / "Phrack #49 phile 0x03"
-            Regex::new(r"(?i)phrack(?:\s+(?:magazine|inc\.?|issue|volume))*[\s#]*(\d{1,2})\s*[,:;-]\s*(?:article|phile|file|text)\s*#?\s*(0x[0-9a-f]{1,2}|\d{1,2})\b").unwrap(),
+            Regex::new(r"(?i)phrack(?:\s+(?:magazine|inc\.?|issue))*[\s#]*(\d{1,2})\s*[,:;-]\s*(?:article|phile|file|text)\s*#?\s*(0x[0-9a-f]{1,2}|\d{1,2})\b").unwrap(),
             // "Phrack 49", "Phrack #50", "Phrack Magazine issue 7"
-            Regex::new(r"(?i)phrack(?:\s+(?:magazine|inc\.?|issue|volume))*[\s#]*(\d{1,2})\b").unwrap(),
+            Regex::new(r"(?i)phrack(?:\s+(?:magazine|inc\.?|issue))*[\s#]*(\d{1,2})\b").unwrap(),
             // "p49-0x0e", "P64-12"
             Regex::new(r"\bp(\d{2})[-_](0x[0-9a-fA-F]{2}|\d{1,2})\b").unwrap(),
         )
@@ -314,6 +314,7 @@ mod tests {
         let t: Vec<String> = [
             "as seen in Phrack 49, article 3 and Phrack #50 or p49-0x0e",
             "see Phrack 99 (bogus) and Phrack 7",
+            "Phrack Magazine Volume 7, Issue 51 September 01, 1997",
         ]
         .iter()
         .map(|s| s.to_string())

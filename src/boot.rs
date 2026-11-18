@@ -25,6 +25,8 @@ pub struct Boot {
     /// (start ms, text, ms per character)
     lines: Vec<(u64, String, u64)>,
     end: u64,
+    /// Fixed clock for offline rendering (the demo recorder); `None` = wall clock.
+    clock: Option<u64>,
 }
 
 /// `LABEL ........ VALUE`, dotted out to a fixed column.
@@ -83,11 +85,19 @@ impl Boot {
     pub fn new(info: &BootInfo) -> Boot {
         let lines = script(info);
         let end = lines.iter().map(|(t, s, sp)| t + s.chars().count() as u64 * sp).max().unwrap_or(0) + 450;
-        Boot { start: Instant::now(), lines, end }
+        Boot { start: Instant::now(), lines, end, clock: None }
     }
 
     fn elapsed(&self) -> u64 {
-        self.start.elapsed().as_millis() as u64
+        self.clock.unwrap_or_else(|| self.start.elapsed().as_millis() as u64)
+    }
+
+    pub fn set_clock(&mut self, ms: u64) {
+        self.clock = Some(ms);
+    }
+
+    pub fn end_ms(&self) -> u64 {
+        self.end
     }
 
     pub fn done(&self) -> bool {

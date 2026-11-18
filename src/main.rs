@@ -6,6 +6,7 @@ mod collview;
 mod complete;
 mod crt;
 mod data;
+mod demo;
 mod doc;
 mod help;
 mod input;
@@ -46,6 +47,7 @@ OPTIONS:
         --theme NAME    amber (default), crt, dracula (`:theme` inside saves your choice)
         --no-crt        disable scanlines / glow / vignette / flicker
         --dump WxH      render the first frame as plain text and exit (debugging)
+        --demo-svg FILE record the animated README demo to FILE and exit
     -h, --help          show this help
 
 ISSUES_DIR defaults to $PHRACK_ISSUES, ./issues, then the repo's issues/ directory.
@@ -58,10 +60,11 @@ struct Opts {
     theme: Option<String>,
     crt: bool,
     dump: Option<(u16, u16)>,
+    demo: Option<String>,
 }
 
 fn parse_args() -> Result<Opts, String> {
-    let mut o = Opts { dir: None, boot: true, theme: None, crt: true, dump: None };
+    let mut o = Opts { dir: None, boot: true, theme: None, crt: true, dump: None, demo: None };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -72,6 +75,7 @@ fn parse_args() -> Result<Opts, String> {
             "--no-boot" => o.boot = false,
             "--no-crt" => o.crt = false,
             "--theme" => o.theme = Some(it.next().ok_or("--theme needs a name")?),
+            "--demo-svg" => o.demo = Some(it.next().ok_or("--demo-svg needs a file")?),
             "--dump" => {
                 let v = it.next().ok_or("--dump needs WxH")?;
                 let (w, h) = v.split_once('x').ok_or("--dump expects WxH")?;
@@ -115,6 +119,14 @@ fn main() {
             std::process::exit(2);
         }
         theme_override = Some(t.clone());
+    }
+
+    if let Some(out) = &opts.demo {
+        if let Err(e) = demo::record(lib, out) {
+            eprintln!("phrack-tui: {e}");
+            std::process::exit(1);
+        }
+        return;
     }
 
     if let Some((w, h)) = opts.dump {

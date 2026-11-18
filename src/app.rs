@@ -219,6 +219,10 @@ impl App {
         (gutter, self.view_w().saturating_sub(gutter + 1).max(1))
     }
 
+    pub fn seed_rng(&mut self, seed: u64) {
+        self.rng = seed | 1;
+    }
+
     pub fn boot_info(&self, truecolor: bool) -> crate::boot::BootInfo {
         crate::boot::BootInfo {
             issues: self.lib.issues.len(),

@@ -1,5 +1,10 @@
 # phrack-tui
 
+<p align="center">
+  <img src="docs/demo.svg" alt="phrack-tui demo: boot sequence, browsing issues, vim-style reading, Tab-completed commands, cross-reference hints, fuzzy finder, whole-archive grep, bookmarks and snippets, across amber, green and violet palettes" width="880">
+</p>
+
+
 A green-phosphor CRT terminal reader for the Phrack archive in `issues/`, with vim keys and Phrack-aware navigation.
 
     cargo run --release            # from the repo root (uses ./issues)
@@ -21,3 +26,14 @@ Options: `--no-boot`, `--theme amber|crt|dracula` (this session only; `:theme NA
   selection, `dd` delete, `r` rename, `e` note, `y` yank); `]b [b ]s [s` step through them. Stored in `state.collection`
   next to the state file, and re-anchored by text if a phile changes.
 - Legacy CP437 / non-UTF-8 philes are decoded; read marks, marks and positions persist in `~/.local/state/phrack-tui/state`.
+
+## Regenerating the demo
+
+`docs/demo.svg` is not hand-drawn. It is recorded from the real UI: a scripted key sequence (`src/demo.rs`) is fed to the app, every
+frame is rendered by the actual renderer, and the result is written as one SMIL-animated SVG (CRT vignette, scanlines and bloom are SVG
+overlays). It uses a throw-away in-memory profile, so it never touches your state.
+
+    cargo run --release -- --demo-svg docs/demo.svg
+    PHRACK_DEMO_VERBOSE=1 ...   # print when each caption starts
+    PHRACK_DEMO_STILLS=6000,20000 ...   # also write static previews of those instants (ms)
+
