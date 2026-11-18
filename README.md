@@ -1,5 +1,12 @@
 # phrack-tui 📟
 
+[![Release](https://img.shields.io/github/actions/workflow/status/krmbzds/phrack-tui/release.yml?label=release)](https://github.com/krmbzds/phrack-tui/actions/workflows/release.yml)
+[![Version](https://img.shields.io/crates/v/phrack-tui.svg)](https://crates.io/crates/phrack-tui)
+[![Downloads](https://img.shields.io/crates/d/phrack-tui.svg)](https://crates.io/crates/phrack-tui)
+[![Dependencies](https://deps.rs/crate/phrack-tui/latest/status.svg)](https://deps.rs/crate/phrack-tui)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/krmbzds/phrack-tui/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://kerem.mit-license.org)
+
 <p align="center">
   <img src="docs/demo.svg" alt="Animated demo of phrack-tui: the boot sequence, the first-run download, browsing and reading issues, following cross-references, bookmarks and snippets, and the amber, green and violet palettes" width="880">
 </p>
