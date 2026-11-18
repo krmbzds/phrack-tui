@@ -6,6 +6,10 @@
 //! shared timeline; the CRT look (tube gradient, vignette, scanlines, bloom,
 //! flicker) is applied as SVG overlays so the file stays small.
 //!
+//! The recording starts from an EMPTY library, shows the first-run download prompt
+//! and replays the real archive through the same events the downloader emits, so
+//! it needs a local copy of the archive but never touches the network or your config.
+//!
 //!     cargo run --release -- --demo-svg docs/demo.svg
 
 use std::{collections::HashMap, fmt::Write as _, fs, thread, time::Duration};
@@ -17,7 +21,9 @@ use crate::{
     boot::Boot,
     buffer::{Buffer, Style},
     collection::Collection,
+    config::Config,
     crt::Fx,
+    download::Event,
     data::Library,
     input::K,
     state::PState,
@@ -49,6 +55,7 @@ struct Caption {
 
 struct Recorder {
     app: App,
+    corpus: Library,
     buf: Buffer,
     t: u64,
     frames: Vec<Frame>,
@@ -75,24 +82,17 @@ fn f1(v: f64) -> String {
 
 impl Recorder {
     fn new(lib: Library) -> Recorder {
-        let mut st = PState::default();
-        // a lived-in profile: some issues already read, so progress bars show
-        for i in lib.issues.iter().filter(|i| i.num <= 6 || i.num == 49) {
-            for a in &i.articles {
-                st.read.insert((i.num, a.num));
-            }
-        }
-        for a in 1..=8 {
-            st.read.insert((50, a));
-        }
-        st.read.insert((25, 1));
-        st.read.insert((25, 2));
-        st.last = Some((25, 2, 0));
-        let mut app = App::new(lib, st, Collection::default(), (COLS, ROWS));
+        let st = PState::default();
+        let root = std::env::var_os("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".local/share/phrack-tui/issues"))
+            .unwrap_or_else(|| crate::paths::data_dir().join("issues"));
+        let mut app = App::new(Library { issues: Vec::new() }, st, Collection::default(), Config::default(), root, (COLS, ROWS));
+        app.dl_offline = true; // replay, never download
         app.fx = Fx::none(); // the SVG overlays do the CRT effects
         app.seed_rng(0x00c0_ffee);
         let th = app.theme.clone();
         Recorder {
+            corpus: lib,
             buf: Buffer::new(COLS, ROWS, Style::new(th.fg, th.bg)),
             app,
             t: 0,
@@ -225,6 +225,65 @@ impl Recorder {
             t += 50;
         }
         self.app.boot = None;
+        self.app.start(); // empty archive: the "Download issues? Y/n" prompt appears
+    }
+
+    /// Replay the archive through the downloader's own event stream: a short
+    /// "dialling" moment, then philes landing in issue order, then the hand-over.
+    /// A lived-in profile: some issues already read, so progress bars have something to show.
+    fn seed_read_marks(&mut self) {
+        let st = &mut self.app.st;
+        for i in self.corpus.issues.iter().filter(|i| i.num <= 6 || i.num == 49) {
+            for a in &i.articles {
+                st.read.insert((i.num, a.num));
+            }
+        }
+        for a in 1..=8 {
+            st.read.insert((50, a));
+        }
+        st.read.insert((25, 1));
+        st.read.insert((25, 2));
+    }
+
+    fn download_replay(&mut self) {
+        let mut evs = vec![Event::Indexed(self.corpus.issues.len())];
+        for i in &self.corpus.issues {
+            evs.push(Event::Listed { issue: i.num, files: i.articles.len() });
+            for a in &i.articles {
+                evs.push(Event::Saved { issue: i.num, art: a.num, path: a.path.clone(), bytes: a.size, fresh: true });
+            }
+        }
+        const STEP: u64 = 120;
+        const CONNECT: u64 = 6;
+        const FRAMES: u64 = 52;
+        if let Some(dl) = self.app.dl.as_mut() {
+            dl.rate_scale = 8.0; // this replay runs ~8x faster than a real download
+        }
+        let n = evs.len();
+        let mut sent = 0;
+        for f in 0..CONNECT + FRAMES {
+            if let Some(dl) = self.app.dl.as_mut() {
+                dl.clock = Some((f + 1) * STEP);
+            }
+            if f >= CONNECT {
+                let k = (f - CONNECT + 1) as usize;
+                let upto = if k as u64 == FRAMES { n } else { n * k / FRAMES as usize };
+                for ev in evs[sent..upto].iter().cloned() {
+                    self.app.apply_dl_event(ev);
+                }
+                sent = upto;
+            }
+            self.app.blink = (f / 4) % 2 == 0;
+            self.snap_raw(STEP);
+        }
+        self.app.finish_download();
+        while self.app.dl.is_some() {
+            if let Some(dl) = self.app.dl.as_mut() {
+                dl.clock = Some(dl.clock.unwrap_or(0) + STEP);
+            }
+            self.app.dl_tick(); // hands over to the main screen after the linger
+            self.snap_raw(STEP);
+        }
     }
 
     // ---- row -> SVG fragment --------------------------------------------------
@@ -314,7 +373,10 @@ impl Recorder {
             r.text.push(c.ch);
             r.xs.push(x as f64 * CW);
             r.cells = x + cw - r.x0;
-            if !c.ch.is_ascii() {
+            // ASCII and the box-drawing/block range are the same width in every monospace
+            // font; anything else (◆ ▶ braille ...) may fall back to another font, so those
+            // runs pin each glyph to its cell instead.
+            if !(c.ch.is_ascii() || ('\u{2500}'..='\u{259f}').contains(&c.ch)) {
                 r.ascii = false;
             }
             x += cw;
@@ -565,12 +627,18 @@ impl Recorder {
 fn script(r: &mut Recorder) {
     let (nav, typ) = (90, 60);
 
-    r.caption("phrack-tui", "73 issues · 1057 philes · vim keys · a CRT that looks the part");
+    r.caption("phrack-tui", "read Phrack in a terminal that looks the part");
     r.boot();
+    r.caption("First run: fetch the archive", "Download issues?   ⏎ / y");
+    r.wait(1500);
+    r.keys("<CR>", 400);
+
+    r.caption("Philes stream in as they download", "live progress  ·  esc aborts  ·  :download tops up later");
+    r.download_replay();
+    r.seed_read_marks();
     r.wait(500);
 
-    r.caption("Browse every issue", "h  j k  G  25G  l  ⏎");
-    r.keys("h", 300);
+    r.caption("Browse every issue", "j k  G  25G  l  ⏎");
     r.wait(300);
     r.keys("G", nav);
     r.wait(350);

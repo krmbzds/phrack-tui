@@ -33,9 +33,16 @@ pub struct Library {
 }
 
 impl Library {
+    /// Read the archive from disk. A missing directory is an empty library
+    /// (first run), not an error.
     pub fn scan(root: &Path) -> io::Result<Library> {
         let mut issues = Vec::new();
-        for entry in fs::read_dir(root)? {
+        let rd = match fs::read_dir(root) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Library { issues }),
+            Err(e) => return Err(e),
+        };
+        for entry in rd {
             let entry = entry?;
             let Some(num) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
                 continue;
@@ -69,6 +76,32 @@ impl Library {
         }
         issues.sort_by_key(|i| i.num);
         Ok(Library { issues })
+    }
+
+    /// Add (or refresh) one phile read from `path`, keeping everything sorted.
+    /// Returns true when it was not in the library before.
+    pub fn add_article(&mut self, issue: u32, num: u32, path: PathBuf) -> bool {
+        let (title, author) = read_meta(&path);
+        let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let article = Article { issue, num, title: if title.is_empty() { format!("Phile {num}") } else { title }, author, path, size };
+        let i = match self.issues.binary_search_by_key(&issue, |i| i.num) {
+            Ok(i) => i,
+            Err(i) => {
+                self.issues.insert(i, Issue { num: issue, articles: Vec::new() });
+                i
+            }
+        };
+        let arts = &mut self.issues[i].articles;
+        match arts.binary_search_by_key(&num, |a| a.num) {
+            Ok(j) => {
+                arts[j] = article;
+                false
+            }
+            Err(j) => {
+                arts.insert(j, article);
+                true
+            }
+        }
     }
 
     pub fn issue_index(&self, num: u32) -> Option<usize> {
@@ -206,22 +239,14 @@ fn unquote(s: &str) -> String {
     }
 }
 
-/// Resolve the archive directory from CLI arg / env / cwd / compile-time path.
-pub fn find_root(arg: Option<&str>) -> Option<PathBuf> {
-    let mut cands: Vec<PathBuf> = Vec::new();
+/// Where the archive lives: CLI argument, then `$PHRACK_ISSUES`, then the config
+/// (`download_path`, else the XDG data directory).
+pub fn resolve_root(arg: Option<&str>, cfg: &crate::config::Config) -> PathBuf {
     if let Some(a) = arg {
-        cands.push(a.into());
+        return crate::paths::expand_tilde(Path::new(a));
     }
-    if let Ok(e) = std::env::var("PHRACK_ISSUES") {
-        cands.push(e.into());
+    if let Some(e) = std::env::var_os("PHRACK_ISSUES").filter(|v| !v.is_empty()) {
+        return crate::paths::expand_tilde(Path::new(&e));
     }
-    cands.push("issues".into());
-    cands.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("issues"));
-    cands.push(".".into());
-    cands.into_iter().find(|p| {
-        p.is_dir()
-            && fs::read_dir(p)
-                .map(|d| d.flatten().any(|e| e.path().is_dir() && e.file_name().to_string_lossy().parse::<u32>().is_ok()))
-                .unwrap_or(false)
-    })
+    cfg.issues_dir()
 }

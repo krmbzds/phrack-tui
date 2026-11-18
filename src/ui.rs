@@ -36,6 +36,12 @@ pub fn render(app: &App, buf: &mut Buffer) {
             Overlay::Help(s) => draw_help(app, *s, buf),
             Overlay::Picker(p) => draw_picker(app, p, buf),
             Overlay::Coll(v) => draw_coll(app, v, buf),
+            Overlay::DlPrompt => draw_dlprompt(app, buf),
+            Overlay::Download => {
+                if let Some(dl) = &app.dl {
+                    draw_download(app, dl, buf)
+                }
+            }
         }
     }
     crt::apply(buf, th, &app.fx, app.bright);
@@ -104,6 +110,9 @@ fn draw_frame(app: &App, buf: &mut Buffer) {
 // ---------------------------------------------------------------- browser
 
 fn draw_browser(app: &App, buf: &mut Buffer) {
+    if app.lib.issues.is_empty() {
+        return draw_empty(app, buf);
+    }
     let th = &app.theme;
     let (x0, y0) = (1u16, 1u16);
     let cw = buf.w - 2;
@@ -400,7 +409,14 @@ fn draw_status(app: &App, buf: &mut Buffer) {
         let right = format!("{}  {}  {}:{} ", author, r.percent(vh), r.row + 1, r.col + 1);
         (mode, left, right)
     } else {
-        let i = &app.lib.issues[app.browser.issue];
+        let Some(i) = app.lib.issues.get(app.browser.issue) else {
+            let pill = Style::new(th.status_bg, th.bright).bold();
+            let x = buf.put(0, y, " BROWSE ", pill, w) as u16;
+            buf.put(x, y, " no issues on disk", base, w);
+            let hint = "Enter download  F1 help ";
+            buf.put((w - hint.chars().count()) as u16, y, hint, Style::new(th.status_fg, th.status_bg).fg(th.dim.mix(th.status_fg, 0.5)), w);
+            return;
+        };
         let left = match app.browser.pane {
             Pane::Issues => format!(" PHRACK {}  ({} philes)", i.num, i.articles.len()),
             Pane::Articles => {
@@ -731,4 +747,187 @@ fn draw_coll(app: &App, v: &CollView, buf: &mut Buffer) {
         }
         buf.put(px, y + i as u16, l, st, pw);
     }
+}
+
+// ------------------------------------------------------- first run & download
+
+/// The browser with nothing in it yet.
+fn draw_empty(app: &App, buf: &mut Buffer) {
+    // the prompt / overlay is the focus; don't compete with it
+    if matches!(app.overlay, Overlay::DlPrompt | Overlay::Download) {
+        return;
+    }
+    let th = &app.theme;
+    let lines = [
+        ("NO ARCHIVE ON DISK".to_string(), Style::new(th.heading, th.bg).bold()),
+        (String::new(), Style::new(th.fg, th.bg)),
+        (format!("{} is empty.", crate::paths::tilde(&app.root)), Style::new(th.dim, th.bg)),
+        (format!("Press Enter, or type :download, to fetch it from {}.", app.cfg.host()), Style::new(th.fg, th.bg)),
+    ];
+    let y0 = buf.h / 2 - 3;
+    for (i, (t, st)) in lines.iter().enumerate() {
+        let w = t.chars().count() as u16;
+        let x = buf.w.saturating_sub(w) / 2;
+        buf.put(x, y0 + i as u16, t, *st, buf.w as usize);
+    }
+}
+
+fn draw_dlprompt(app: &App, buf: &mut Buffer) {
+    let th = &app.theme;
+    let panel = th.bg_center;
+    let (ix, iy, iw, _) = boxed(app, buf, 52.min(buf.w - 4), 9, "ARCHIVE", "⏎ / y  download    n / esc  skip");
+    let q = "Download issues? ";
+    let total = q.chars().count() + 3 + 1;
+    let x = ix + (iw as usize).saturating_sub(total) as u16 / 2;
+    let bright = Style::new(th.bright, panel).bold();
+    let mut cx = x;
+    cx += buf.put(cx, iy + 2, q, bright, iw as usize) as u16;
+    cx += buf.put(cx, iy + 2, "Y", Style::new(th.bg, th.bright).bold(), 1) as u16;
+    cx += buf.put(cx, iy + 2, "/n", Style::new(th.dim, panel), 2) as u16;
+    if app.blink {
+        buf.set(cx + 1, iy + 2, '█', Style::new(th.bright, panel));
+    }
+    let src = format!("from  {}", app.cfg.host());
+    let dst = format!("to    {}", crate::paths::tilde(&app.root));
+    // left-align the two lines to each other, centred as a block
+    let block = src.chars().count().max(dst.chars().count()).min(iw as usize);
+    let bx = ix + (iw as usize - block) as u16 / 2;
+    buf.put(bx, iy + 4, &trunc(&src, block), Style::new(th.dim, panel), block);
+    buf.put(bx, iy + 5, &trunc(&dst, block), Style::new(th.dim, panel), block);
+}
+
+fn hash(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+fn human(bytes: u64) -> String {
+    if bytes >= 1 << 20 {
+        format!("{:.1}M", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{}K", (bytes / 1024).max(1))
+    }
+}
+
+fn draw_download(app: &App, dl: &crate::dlflow::DlState, buf: &mut Buffer) {
+    const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    const WAVE: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let th = &app.theme;
+    let panel = th.bg_center;
+    let t = dl.now_ms();
+    let done = dl.finished_at.is_some();
+    let big = buf.h >= 24;
+    let bw = (buf.w - 6).min(66);
+    let bh = if big { 20.min(buf.h - 3) } else { (buf.h - 3).min(14) };
+    let spin = if done { '■' } else { SPIN[(t / 80) as usize % 10] };
+    let title = format!("{spin} {}", app.cfg.host().to_uppercase());
+    let footer = if done { "any key" } else { "esc  abort" };
+    let (ix, iy, iw, ih) = boxed(app, buf, bw, bh, &title, footer);
+    let w = iw as usize;
+    let fg = Style::new(th.fg, panel);
+
+    // status line
+    let status: String = if let Some(f) = &dl.fatal {
+        format!("CARRIER LOST  {f}")
+    } else if done && dl.cancelled {
+        "TRANSFER ABORTED".into()
+    } else if done {
+        "TRANSFER COMPLETE".into()
+    } else if dl.cancelled {
+        "ABORTING…".into()
+    } else if dl.total_issues.is_none() {
+        format!("ATDT {}{}", app.cfg.host(), ".".repeat((t / 300 % 4) as usize))
+    } else {
+        "RECEIVING PHILES".into()
+    };
+    let shimmer = !done && dl.fatal.is_none() && dl.total_issues.is_some() && !dl.cancelled;
+    let status = trunc(&status, w);
+    for (i, c) in status.chars().enumerate() {
+        let st = if dl.fatal.is_some() {
+            Style::new(th.err, panel).bold()
+        } else if shimmer {
+            // a bright band sweeping across the text
+            let phase = (i as i64 - (t / 70) as i64).rem_euclid(24);
+            if phase < 3 { Style::new(th.heading, panel).bold() } else { Style::new(th.fg, panel) }
+        } else {
+            Style::new(th.bright, panel).bold()
+        };
+        buf.set(ix + i as u16, iy, c, st);
+    }
+
+    // progress bar
+    let p = dl.progress();
+    let bar_w = w.saturating_sub(8);
+    let filled = (p * bar_w as f64) as usize;
+    buf.set(ix, iy + 2, '[', Style::new(th.dim, panel));
+    for i in 0..bar_w {
+        let (c, st) = if i < filled {
+            ('█', Style::new(if done { th.bright } else { th.fg }, panel))
+        } else if i == filled && !done {
+            (['▓', '▒', '░'][(t / 110 % 3) as usize], Style::new(th.fg, panel))
+        } else {
+            ('░', Style::new(th.faint, panel))
+        };
+        buf.set(ix + 1 + i as u16, iy + 2, c, st);
+    }
+    buf.set(ix + 1 + bar_w as u16, iy + 2, ']', Style::new(th.dim, panel));
+    buf.put(ix + bar_w as u16 + 3, iy + 2, &format!("{:>3}%", (p * 100.0).round() as u32), Style::new(th.bright, panel).bold(), 5);
+
+    // stats
+    let issues = match dl.total_issues {
+        Some(n) => format!("{}/{}", dl.per_issue.len(), n.max(dl.per_issue.len())),
+        None => "-".into(),
+    };
+    let mut stats = format!("ISSUES {issues}    PHILES {}    {:.1} MB    {:.0} KB/s", dl.files, dl.bytes as f64 / 1_048_576.0, dl.kb_per_s());
+    if !dl.failed.is_empty() {
+        stats.push_str(&format!("    ! {}", dl.failed.len()));
+    }
+    buf.put(ix, iy + 4, &trunc(&stats, w), Style::new(th.dim.mix(th.fg, 0.6), panel), w);
+
+    // live log of arriving philes, newest at the bottom, older ones fading out
+    let extra = if big { 6 } else { 0 };
+    let log_h = (ih as usize).saturating_sub(6 + extra);
+    let log_y = iy + 6;
+    let shown: Vec<_> = dl.log.iter().rev().take(log_h).collect::<Vec<_>>().into_iter().rev().collect();
+    let first = log_h - shown.len();
+    for (j, l) in shown.iter().enumerate() {
+        let age = (shown.len() - 1 - j) as f32 / log_h.max(1) as f32;
+        let col = th.fg.mix(th.faint, (age * 0.9).min(0.9));
+        let st = if j + 1 == shown.len() { Style::new(th.bright, panel).bold() } else { Style::new(col, panel) };
+        let y = log_y + (first + j) as u16;
+        let mark = if l.fresh { "+" } else { "=" };
+        let size = human(l.bytes);
+        buf.put(ix, y, &format!("{mark} {}", trunc(&l.label, w.saturating_sub(10))), st, w.saturating_sub(7));
+        buf.put(ix + (w - size.chars().count()) as u16, y, &size, Style::new(col, panel), 7);
+    }
+
+    if big {
+        // signal waveform + a hex stream, purely for atmosphere
+        let wy = iy + ih - 5;
+        let amp = if done { 0.12 } else { 0.4 + 0.6 * (dl.kb_per_s() / 250.0).min(1.0) };
+        for c in 0..w {
+            let v = ((c as f64 * 0.45 + t as f64 / 110.0).sin() * 0.5 + (c as f64 * 0.17 - t as f64 / 170.0).sin() * 0.5) * amp;
+            let h = (((v * 0.5 + 0.5) * 8.0).round() as usize).min(8);
+            buf.set(ix + c as u16, wy, WAVE[h], Style::new(th.dim, panel));
+        }
+        for r in 0..3u64 {
+            let y = wy + 1 + r as u16 + 1;
+            if y >= iy + ih {
+                break;
+            }
+            for c in 0..w {
+                if c % 3 == 2 {
+                    continue;
+                }
+                let idx = (c as u64) + if done { 0 } else { t / (45 + r * 22) };
+                let hh = hash(idx.wrapping_mul(31).wrapping_add(r * 977));
+                let st = if hh % 13 == 0 { Style::new(th.dim, panel) } else { Style::new(th.faint, panel) };
+                buf.set(ix + c as u16, y, HEX[(hh % 16) as usize] as char, st);
+            }
+        }
+    }
+    let _ = fg;
 }

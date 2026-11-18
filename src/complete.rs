@@ -11,6 +11,7 @@ enum Arg {
     Author,
     SnippetId,
     BookmarkId,
+    Download,
 }
 
 /// Every command the executor understands, with what its argument is.
@@ -23,6 +24,7 @@ const COMMANDS: &[(&str, Arg)] = &[
     ("bookmarks", Arg::None),
     ("colorscheme", Arg::Theme),
     ("delbm", Arg::BookmarkId),
+    ("download", Arg::Download),
     ("delmarks", Arg::None),
     ("delsnip", Arg::SnippetId),
     ("find", Arg::None),
@@ -51,6 +53,7 @@ const COMMANDS: &[(&str, Arg)] = &[
     ("theme", Arg::Theme),
     ("toc", Arg::Issue),
     ("unread", Arg::None),
+    ("update", Arg::Download),
     ("worldnews", Arg::None),
     ("wq", Arg::None),
     ("write", Arg::None),
@@ -69,6 +72,7 @@ fn arg_kind(cmd: &str) -> Arg {
         "author" | "au" | "authors" => Arg::Author,
         "delsnip" | "delsnippet" => Arg::SnippetId,
         "delbm" | "delbookmark" => Arg::BookmarkId,
+        "download" | "dl" | "update" => Arg::Download,
         _ => Arg::None,
     }
 }
@@ -136,6 +140,10 @@ pub fn candidates(text: &str, lib: &Library, coll: &Collection) -> (usize, Vec<S
             v.truncate(500);
             v
         }
+        Arg::Download => std::iter::once("refresh".to_string())
+            .chain(lib.issues.iter().map(|i| i.num.to_string()))
+            .filter(|n| starts(n, tok))
+            .collect(),
         Arg::SnippetId => coll.snippets.iter().map(|s| s.id.to_string()).filter(|n| n.starts_with(tok)).collect(),
         Arg::BookmarkId => coll.bookmarks.iter().map(|s| s.id.to_string()).filter(|n| n.starts_with(tok)).collect(),
     };
@@ -174,6 +182,9 @@ mod tests {
         assert_eq!(candidates("author kn", &l, &c).1, vec!["Knight Lightning"]);
         assert_eq!(candidates("author Taran K", &l, &c).1, vec!["Taran King"]);
         assert!(candidates("grep x", &l, &c).1.is_empty());
+        assert_eq!(candidates("download r", &l, &c).1, vec!["refresh"]);
+        assert_eq!(candidates("download 2", &l, &c).1, vec!["25"]);
+        assert_eq!(candidates("upd", &l, &c).1, vec!["update"]);
         // visual range prefix is skipped
         assert_eq!(candidates("'<,'>th", &l, &c), (5, vec!["theme".to_string()]));
     }

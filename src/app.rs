@@ -13,6 +13,8 @@ use crossterm::event::{MouseEvent, MouseEventKind};
 
 use crate::{
     boot::Boot,
+    config::Config,
+    dlflow::DlState,
     collection::{Collection, Snippet},
     collview::{CollView, Tab},
     crt::Fx,
@@ -42,6 +44,10 @@ pub enum Overlay {
     Help(usize),
     Picker(Box<Picker>),
     Coll(Box<CollView>),
+    /// "Download issues? Y/n"
+    DlPrompt,
+    /// Live download animation.
+    Download,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -102,6 +108,14 @@ pub struct App {
     pub theme: Theme,
     pub fx: Fx,
     pub st: PState,
+    pub cfg: Config,
+    /// Write `:theme` changes back to config.toml (off for the demo recorder).
+    pub persist_config: bool,
+    /// Directory the archive is read from / downloaded into.
+    pub root: std::path::PathBuf,
+    pub dl: Option<DlState>,
+    /// Never touch the network: `start_download` only opens the overlay (demo recorder).
+    pub dl_offline: bool,
     pub coll: Collection,
     pub hover: Option<(usize, usize)>,
     pub browser: Browser,
@@ -134,12 +148,8 @@ macro_rules! rd {
 }
 
 impl App {
-    pub fn new(lib: Library, st: PState, coll: Collection, size: (u16, u16)) -> App {
-        let theme = st
-            .theme
-            .as_deref()
-            .and_then(theme::by_name)
-            .unwrap_or_else(|| theme::all().remove(0));
+    pub fn new(lib: Library, st: PState, coll: Collection, cfg: Config, root: std::path::PathBuf, size: (u16, u16)) -> App {
+        let theme = theme::by_name(&cfg.theme).unwrap_or_else(|| theme::all().remove(0));
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -149,8 +159,13 @@ impl App {
             browser: Browser { issue: lib.issues.len().saturating_sub(1), art: 0, pane: Pane::Issues },
             lib,
             theme,
-            fx: Fx::default(),
+            fx: Fx { scan: cfg.crt.scan, glow: cfg.crt.glow, vignette: cfg.crt.vignette, flicker: cfg.crt.flicker },
             st,
+            cfg,
+            persist_config: false,
+            root,
+            dl: None,
+            dl_offline: false,
             coll,
             hover: None,
             reader: None,
@@ -223,6 +238,13 @@ impl App {
         self.rng = seed | 1;
     }
 
+    /// Enter on the empty screen: ask again.
+    fn maybe_prompt_forced(&mut self) {
+        if self.dl.is_none() && matches!(self.overlay, Overlay::None) {
+            self.overlay = Overlay::DlPrompt;
+        }
+    }
+
     pub fn boot_info(&self, truecolor: bool) -> crate::boot::BootInfo {
         crate::boot::BootInfo {
             issues: self.lib.issues.len(),
@@ -238,6 +260,8 @@ impl App {
             bookmarks: self.coll.bookmarks.len(),
             snippets: self.coll.snippets.len(),
             last: self.st.last.map(|(i, a, _)| (i, a)),
+            host: self.cfg.host(),
+            storage: crate::paths::tilde(&self.root),
         }
     }
 
@@ -263,8 +287,11 @@ impl App {
         let mut dirty = false;
         if let Some(b) = &self.boot {
             if b.done() {
-                self.boot = None;
+                self.finish_boot();
             }
+            return true;
+        }
+        if self.dl_tick() {
             return true;
         }
         if now.duration_since(self.last_blink) > Duration::from_millis(530) {
@@ -310,8 +337,14 @@ impl App {
         self.hover = None;
         self.blink = true;
         self.last_blink = Instant::now();
-        if self.boot.take().is_some() {
+        if self.boot.is_some() {
+            self.finish_boot();
             return;
+        }
+        match self.overlay {
+            Overlay::DlPrompt => return self.dlprompt_key(k),
+            Overlay::Download => return self.download_key(k),
+            _ => {}
         }
         if k == K::Ctrl('c') && self.cmd.is_none() && matches!(self.overlay, Overlay::None) {
             self.pending.clear();
@@ -329,6 +362,7 @@ impl App {
             Overlay::None => {}
             Overlay::Help(scroll) => return self.help_key(k, scroll),
             Overlay::Coll(v) => return self.coll_key(*v, k),
+            Overlay::DlPrompt | Overlay::Download => unreachable!("handled above"),
             Overlay::Picker(mut p) => {
                 p.page = self.view_h().saturating_sub(6).max(4);
                 match p.key(k) {
@@ -415,6 +449,7 @@ impl App {
                 }
             }
             Overlay::Help(s) => *s = (*s as isize + dir * 3).max(0) as usize,
+            Overlay::DlPrompt | Overlay::Download => {}
             Overlay::Coll(_) => {
                 if let Overlay::Coll(v) = std::mem::replace(&mut self.overlay, Overlay::None) {
                     self.coll_key(*v, if dir > 0 { K::Down } else { K::Up });
@@ -465,6 +500,9 @@ impl App {
     }
 
     pub fn browser_move(&mut self, d: isize) {
+        if self.lib.issues.is_empty() {
+            return;
+        }
         match self.browser.pane {
             Pane::Issues => {
                 let n = self.lib.issues.len();
@@ -479,6 +517,18 @@ impl App {
     }
 
     fn browser_key(&mut self, k: K) {
+        if self.lib.issues.is_empty() {
+            // nothing to browse yet: only the essentials work
+            match k {
+                K::Enter | K::Char('D') => self.maybe_prompt_forced(),
+                K::Char(':') => self.cmd = Some(CmdLine::plain(':', String::new())),
+                K::Char('q') => self.quit_app(),
+                K::F1 => self.overlay = Overlay::Help(0),
+                K::Ctrl('l') => self.redraw_all = true,
+                _ => {}
+            }
+            return;
+        }
         if !self.pending.is_empty() {
             let p = std::mem::take(&mut self.pending);
             return self.browser_prefixed(&p, k);
@@ -751,7 +801,7 @@ impl App {
         if let Some(r) = &self.reader {
             return Some((r.issue, r.art));
         }
-        let i = &self.lib.issues[self.browser.issue];
+        let i = self.lib.issues.get(self.browser.issue)?;
         Some((i.num, i.articles.get(self.browser.art)?.num))
     }
 
@@ -806,6 +856,9 @@ impl App {
 
     fn goto_random(&mut self) {
         let order = self.order();
+        if order.is_empty() {
+            return self.err("no issues on disk yet");
+        }
         let (i, a) = order[(self.rand() % order.len() as u64) as usize];
         if self.reader.is_some() {
             self.push_jump();
@@ -818,6 +871,9 @@ impl App {
 
     fn goto_unread(&mut self) {
         let order = self.order();
+        if order.is_empty() {
+            return self.err("no issues on disk yet");
+        }
         let cur = self.current_key();
         let start = cur.and_then(|c| order.iter().position(|&k| k == c)).map_or(0, |i| i + 1);
         let found = (0..order.len())
@@ -1533,6 +1589,22 @@ impl App {
             return;
         }
         let (cmd, arg) = line.split_once(char::is_whitespace).map_or((line, ""), |(a, b)| (a, b.trim()));
+        if self.lib.issues.is_empty()
+            && !matches!(cmd, "q" | "quit" | "qa" | "qa!" | "q!" | "wq" | "x" | "exit" | "help" | "h" | "theme" | "colorscheme" | "colo" | "set" | "se" | "download" | "dl" | "update" | "noh")
+        {
+            return self.err("no issues on disk yet: press Enter or type :download");
+        }
+        if matches!(cmd, "download" | "dl" | "update") {
+            let (mut refresh, mut only) = (false, None);
+            for w in arg.split_whitespace() {
+                match w.parse::<u32>() {
+                    Ok(n) => only = Some(n),
+                    Err(_) if w == "refresh" || w == "--refresh" => refresh = true,
+                    Err(_) => return self.err("usage: :download [refresh] [ISSUE]"),
+                }
+            }
+            return self.start_download(refresh, only);
+        }
         // :N  -> line (reader) or issue (browser);  :I/A or :I.A -> article
         if let Ok(n) = cmd.parse::<usize>() {
             if self.reader.is_some() {
@@ -1828,9 +1900,12 @@ impl App {
         match theme::by_name(name) {
             Some(t) => {
                 self.theme = t;
-                self.st.theme = Some(self.theme.name.to_string());
-                self.st.save();
                 self.redraw_all = true;
+                if self.persist_config {
+                    if let Err(e) = crate::config::set_theme(self.theme.name) {
+                        self.err(format!("theme applied, but config.toml was not updated: {e}"));
+                    }
+                }
             }
             None => self.err(format!("unknown theme '{name}' (available: {})", names.join(", "))),
         }

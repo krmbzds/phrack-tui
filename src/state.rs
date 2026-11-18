@@ -1,4 +1,4 @@
-//! Tiny line-based persistence: read-tracking, marks, last position, theme.
+//! Tiny line-based persistence: read-tracking, marks, last position.
 //! Lives in `$XDG_STATE_HOME/phrack-tui/state` (or `~/.local/state/...`).
 
 use std::{
@@ -15,17 +15,13 @@ pub struct PState {
     pub global_marks: HashMap<char, (u32, u32, usize)>,
     pub local_marks: HashMap<(u32, u32, char), usize>,
     pub pos: HashMap<(u32, u32), usize>,
-    pub theme: Option<String>,
 }
 
 pub fn default_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("PHRACK_TUI_STATE") {
         return Some(p.into());
     }
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(base.join("phrack-tui").join("state"))
+    Some(crate::paths::state_dir().join("state"))
 }
 
 impl PState {
@@ -63,7 +59,6 @@ impl PState {
                         st.pos.insert((a, b), r as usize);
                     }
                 }
-                Some("theme") => st.theme = f.get(1).map(|s| s.to_string()),
                 _ => {}
             }
         }
@@ -73,9 +68,6 @@ impl PState {
     pub fn save(&self) {
         let Some(p) = &self.path else { return };
         let mut s = String::new();
-        if let Some(t) = &self.theme {
-            s.push_str(&format!("theme {t}\n"));
-        }
         if let Some((a, b, c)) = self.last {
             s.push_str(&format!("last {a} {b} {c}\n"));
         }
@@ -120,14 +112,12 @@ mod tests {
         s.global_marks.insert('A', (1, 2, 3));
         s.local_marks.insert((25, 3, 'a'), 7);
         s.pos.insert((25, 3), 99);
-        s.theme = Some("amber".into());
         s.save();
         let t = PState::load(Some(p));
         assert!(t.read.contains(&(25, 3)));
         assert_eq!(t.last, Some((25, 3, 99)));
         assert_eq!(t.global_marks[&'A'], (1, 2, 3));
         assert_eq!(t.local_marks[&(25, 3, 'a')], 7);
-        assert_eq!(t.theme.as_deref(), Some("amber"));
         let _ = fs::remove_dir_all(dir);
     }
 }

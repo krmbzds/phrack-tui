@@ -6,4 +6,7 @@ edition = "2024"
 [dependencies]
 crossterm = "0.29.0"
 regex = "1.13.2"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"
 unicode-width = "0.2.3"
+ureq = "3.5.2"
